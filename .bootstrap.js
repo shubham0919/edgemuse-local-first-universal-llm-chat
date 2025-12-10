@@ -82,7 +82,8 @@ function runSetupCommands() {
     "bun add react-dropzone@^14.2.3",
     "bun add comlink@^4.4.1",
     "bun add web-streams-polyfill@^4.0.1",
-    "bun add @mlc-ai/web-llm"
+    "bun add @mlc-ai/web-llm",
+    "bun add shiki"
 ];
     
     if (commands.length === 0) {
