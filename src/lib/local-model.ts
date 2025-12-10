@@ -1,42 +1,55 @@
+import localforage from 'localforage';
 export interface LocalModel {
-  id: string;
+  id: string; // Corresponds to web-llm's local_id
   name: string;
   size: number; // in bytes
   quantization: string;
   family: string;
   source: 'recommended' | 'user';
-  file?: File; // For user-uploaded models
   downloadUrl?: string; // For recommended models
+  file?: File; // For user-uploaded models
 }
+// Use CORS-safe URLs from MLC-AI's official repo
 export const RECOMMENDED_MODELS: LocalModel[] = [
   {
-    id: 'phi-2-q4k',
-    name: 'Phi-2 (Q4K)',
-    size: 1_620_000_000, // ~1.62 GB
+    id: 'Phi-3-mini-4k-instruct-q4f16_1',
+    name: 'Phi-3 Mini 4k Instruct (Q4F16)',
+    size: 2_300_000_000, // ~2.3 GB
     quantization: '4-bit',
     family: 'Phi',
     source: 'recommended',
-    downloadUrl: 'https://huggingface.co/microsoft/phi-2/resolve/main/model-q4k.gguf',
-  },
-  {
-    id: 'llama-3-8b-instruct-q4k',
-    name: 'Llama 3 8B Instruct (Q4K)',
-    size: 4_100_000_000, // ~4.1 GB
-    quantization: '4-bit',
-    family: 'Llama',
-    source: 'recommended',
-    downloadUrl: 'https://huggingface.co/meta-llama/Meta-Llama-3-8B-Instruct/resolve/main/model-q4k.gguf',
-  },
-  {
-    id: 'gemma-2b-it-q4k',
-    name: 'Gemma 2B IT (Q4K)',
-    size: 1_500_000_000, // ~1.5 GB
-    quantization: '4-bit',
-    family: 'Gemma',
-    source: 'recommended',
-    downloadUrl: 'https://huggingface.co/google/gemma-2b-it/resolve/main/model-q4k.gguf',
+    downloadUrl: 'https://huggingface.co/mlc-ai/Phi-3-mini-4k-instruct-q4f16_1-MLC/resolve/main/',
   },
 ];
+const modelStore = localforage.createInstance({
+  name: 'EdgeMuseDB',
+  storeName: 'models',
+});
+export async function listLocalModels(): Promise<LocalModel[]> {
+  const keys = await modelStore.keys();
+  const models: LocalModel[] = [];
+  for (const key of keys) {
+    const model = await modelStore.getItem<LocalModel>(key);
+    if (model) {
+      models.push(model);
+    }
+  }
+  return models;
+}
+export async function saveModelInfo(model: LocalModel): Promise<void> {
+  await modelStore.setItem(model.id, model);
+}
+export async function getModelInfo(id: string): Promise<LocalModel | null> {
+  return await modelStore.getItem<LocalModel>(id);
+}
+export async function removeModel(id: string): Promise<void> {
+  await modelStore.removeItem(id);
+  // Note: This only removes metadata. The actual model files are managed by web-llm's cache.
+}
+export async function clearAllModels(): Promise<void> {
+  await modelStore.clear();
+  // Note: This only removes metadata. The actual model files are managed by web-llm's cache.
+}
 export function formatModelSize(bytes: number): string {
   if (bytes === 0) return '0 Bytes';
   const k = 1024;
@@ -44,31 +57,10 @@ export function formatModelSize(bytes: number): string {
   const i = Math.floor(Math.log(bytes) / Math.log(k));
   return parseFloat((bytes / Math.pow(k, i)).toFixed(2)) + ' ' + sizes[i];
 }
-export function supportsWebGPU(): boolean {
-  return 'gpu' in navigator;
+export async function supportsWebGPU(): Promise<boolean> {
+  return await navigator.gpu?.requestAdapter() != null;
 }
 export function estimateRamForModel(modelSize: number): number {
-  // A rough estimate: model size + ~20% overhead for context, etc.
-  return modelSize * 1.2;
-}
-// In-memory registry for this phase
-const userModels = new Map<string, LocalModel>();
-export function addUserModel(file: File): LocalModel {
-  const model: LocalModel = {
-    id: `user-${file.name}-${file.lastModified}`,
-    name: file.name,
-    size: file.size,
-    quantization: 'Unknown',
-    family: 'Unknown',
-    source: 'user',
-    file,
-  };
-  userModels.set(model.id, model);
-  return model;
-}
-export function listUserModels(): LocalModel[] {
-  return Array.from(userModels.values());
-}
-export function removeUserModel(id: string): boolean {
-  return userModels.delete(id);
+  // A rough estimate: model size + ~50% overhead for context, KV cache, etc.
+  return modelSize * 1.5;
 }

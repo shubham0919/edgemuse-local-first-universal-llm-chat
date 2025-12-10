@@ -10,10 +10,13 @@ import { ThemeToggle } from '@/components/ThemeToggle';
 import { ChatView } from '@/components/ChatView';
 import { ModelManager } from '@/components/ModelManager';
 import { SessionSidebarEnhanced } from '@/components/SessionSidebarEnhanced';
-import { LocalEngineProvider, useLocalEngine } from '@/components/LocalEngineAdapter';
+import { LocalEngineProvider } from '@/components/LocalEngineAdapter';
+import { useLocalEngine } from '@/hooks/useLocalEngine';
 import { chatService, generateSessionTitle, MODELS } from '@/lib/chat';
 import type { InferenceMode } from '@/lib/chat';
 import type { Message, SessionInfo } from '../../worker/types';
+import { Badge } from '@/components/ui/badge';
+import { formatModelSize, estimateRamForModel } from '@/lib/local-model';
 function HomePageContent() {
   const [messages, setMessages] = useState<Message[]>([]);
   const [streamingMessage, setStreamingMessage] = useState('');
@@ -24,7 +27,7 @@ function HomePageContent() {
   const [currentSessionId, setCurrentSessionId] = useState(chatService.getSessionId());
   const [hasUnsavedMessages, setHasUnsavedMessages] = useState(false);
   const [isModelManagerOpen, setIsModelManagerOpen] = useState(false);
-  const { isAvailable: isLocalEngineAvailable, status: engineStatus, generate: localGenerate } = useLocalEngine();
+  const { isAvailable: isLocalEngineAvailable, status: engineStatus, generate: localGenerate, currentModel } = useLocalEngine();
   const loadSessions = useCallback(async () => {
     const response = await chatService.listSessions();
     if (response.success && response.data) setSessions(response.data);
@@ -99,20 +102,38 @@ function HomePageContent() {
       await chatService.createSession(title, currentSessionId, messageContent);
       await loadSessions();
     }
-    const localGenerator = engineStatus === 'ready' ? localGenerate : undefined;
-    await chatService.sendMessage(messageContent, model, localGenerator, (chunk) => {
-      setStreamingMessage(prev => prev + chunk);
-    });
-    if (chatService.inferenceMode === 'edge') {
-      await loadMessages();
-    } else {
-      const finalAssistantMessage: Message = {
+    const useLocal = chatService.inferenceMode !== 'edge' && engineStatus === 'ready';
+    try {
+      if (useLocal) {
+        await localGenerate(messageContent, (chunk) => {
+          setStreamingMessage(prev => prev + chunk);
+        });
+        const finalAssistantMessage: Message = {
+          id: crypto.randomUUID(),
+          role: 'assistant',
+          content: streamingMessage + (await localGenerate(messageContent, () => {}) || ''), // a bit of a hack to get the full message
+          timestamp: Date.now(),
+        };
+        setMessages(prev => [...prev, finalAssistantMessage]);
+      } else {
+        if (chatService.inferenceMode === 'local') {
+          throw new Error('Local model not ready. Switch to Hybrid or Edge mode.');
+        }
+        await chatService.sendMessage(messageContent, model, undefined, (chunk) => {
+          setStreamingMessage(prev => prev + chunk);
+        });
+        await loadMessages();
+      }
+    } catch (error) {
+      console.error("Chat submission error:", error);
+      const errorMessage = error instanceof Error ? error.message : 'An unknown error occurred.';
+      const errorResponseMessage: Message = {
         id: crypto.randomUUID(),
         role: 'assistant',
-        content: streamingMessage,
+        content: `Error: ${errorMessage}`,
         timestamp: Date.now(),
       };
-      setMessages(prev => [...prev, finalAssistantMessage]);
+      setMessages(prev => [...prev, errorResponseMessage]);
     }
     setStreamingMessage('');
     setIsProcessing(false);
@@ -141,6 +162,9 @@ function HomePageContent() {
               </motion.div>
             </div>
             <div className="flex items-center gap-2 md:gap-4">
+              <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} transition={{ delay: 0.2 }}>
+                <EngineStatusBadge />
+              </motion.div>
               <InferenceModeToggle />
               <Button variant="outline" onClick={() => setIsModelManagerOpen(true)}>
                 <HardDrive className="w-4 h-4 mr-2" />
@@ -171,6 +195,23 @@ function HomePageContent() {
       </SidebarInset>
     </SidebarProvider>
   );
+}
+function EngineStatusBadge() {
+  const { status, currentModel, isAvailable } = useLocalEngine();
+  if (!isAvailable) {
+    return <Badge variant="destructive">No WebGPU</Badge>;
+  }
+  if (status === 'ready' && currentModel) {
+    return (
+      <Badge variant="default" className="bg-green-100 text-green-800 dark:bg-green-900 dark:text-green-200">
+        Local: Ready ({currentModel.name.split(' ')[0]})
+      </Badge>
+    );
+  }
+  if (status === 'initializing') {
+    return <Badge variant="secondary">Local: Initializing...</Badge>;
+  }
+  return <Badge variant="outline">Engine: Idle</Badge>;
 }
 function InferenceModeToggle() {
   const { isAvailable: isLocalEngineAvailable, status: engineStatus } = useLocalEngine();

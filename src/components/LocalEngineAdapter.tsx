@@ -1,71 +1,77 @@
-import { useState, useCallback, createContext, useContext, ReactNode } from 'react';
+import { useState, useEffect, createContext, ReactNode, useMemo } from 'react';
+import * as Comlink from 'comlink';
 import { supportsWebGPU } from '@/lib/local-model';
 import type { LocalModel } from '@/lib/local-model';
-type EngineStatus = 'idle' | 'initializing' | 'ready' | 'generating' | 'error';
-interface LocalEngineState {
+import type { LocalEngine } from '@/workers/local-engine-worker';
+export type EngineStatus = 'idle' | 'initializing' | 'ready' | 'generating' | 'error';
+export interface LocalEngineState {
   isAvailable: boolean;
   status: EngineStatus;
   error: string | null;
   currentModel: LocalModel | null;
+  initProgress: number;
 }
-interface LocalEngineActions {
+export interface LocalEngineActions {
   initialize: (model: LocalModel) => Promise<boolean>;
   generate: (prompt: string, onToken: (token: string) => void) => Promise<void>;
   stop: () => void;
 }
-type LocalEngineContextType = LocalEngineState & LocalEngineActions;
-const LocalEngineContext = createContext<LocalEngineContextType | null>(null);
+export type LocalEngineContextType = LocalEngineState & LocalEngineActions;
+export const LocalEngineContext = createContext<LocalEngineContextType | null>(null);
 export function LocalEngineProvider({ children }: { children: ReactNode }) {
+  const [isGpuSupported, setIsGpuSupported] = useState(false);
+  useEffect(() => {
+    supportsWebGPU().then(setIsGpuSupported);
+  }, []);
   const [state, setState] = useState<LocalEngineState>({
-    isAvailable: supportsWebGPU(),
+    isAvailable: isGpuSupported,
     status: 'idle',
     error: null,
     currentModel: null,
+    initProgress: 0,
   });
-  const initialize = useCallback(async (model: LocalModel): Promise<boolean> => {
-    setState(s => ({ ...s, status: 'initializing', error: null, currentModel: model }));
-    console.log(`[Mock] Initializing model: ${model.name}`);
-    // Simulate model loading time
-    await new Promise(resolve => setTimeout(resolve, 1500));
-    if (model.size > 4_000_000_000) { // Simulate failure for large models
-      const errorMsg = `[Mock] Not enough memory to load ${model.name}.`;
+  const workerApi = useMemo(() => {
+    const worker = new Worker(new URL('../workers/local-engine-worker.ts', import.meta.url), { type: 'module' });
+    return Comlink.wrap<LocalEngine>(worker);
+  }, []);
+  const initialize = async (model: LocalModel): Promise<boolean> => {
+    setState(s => ({ ...s, status: 'initializing', error: null, currentModel: model, initProgress: 0 }));
+    console.log(`Initializing model: ${model.name}`);
+    try {
+      await workerApi.init(model.id);
+      setState(s => ({ ...s, status: 'ready', currentModel: model, initProgress: 100 }));
+      return true;
+    } catch (err) {
+      const errorMsg = err instanceof Error ? err.message : 'Unknown error during initialization';
       console.error(errorMsg);
       setState(s => ({ ...s, status: 'error', error: errorMsg }));
       return false;
     }
-    console.log(`[Mock] Model ${model.name} is ready.`);
-    setState(s => ({ ...s, status: 'ready', currentModel: model }));
-    return true;
-  }, []);
-  const generate = useCallback(async (prompt: string, onToken: (token: string) => void) => {
+  };
+  const generate = async (prompt: string, onToken: (token: string) => void) => {
     if (state.status !== 'ready') {
-      console.error('[Mock] Engine not ready for generation.');
-      return;
+      throw new Error('Engine not ready for generation.');
     }
     setState(s => ({ ...s, status: 'generating' }));
-    const mockResponse = `This is a mocked streaming response for the prompt: "${prompt}". The local model, ${state.currentModel?.name}, is processing this request on your device. This demonstrates the token-by-token generation capability of EdgeMuse's local-first architecture.`;
-    const tokens = mockResponse.split(' ');
-    for (const token of tokens) {
-      await new Promise(resolve => setTimeout(resolve, 50));
-      onToken(token + ' ');
+    try {
+      await workerApi.generate(prompt, Comlink.proxy(onToken));
+    } catch (err) {
+      const errorMsg = err instanceof Error ? err.message : 'Unknown error during generation';
+      console.error(errorMsg);
+      setState(s => ({ ...s, status: 'error', error: errorMsg }));
+    } finally {
+      setState(s => ({ ...s, status: 'ready' }));
     }
+  };
+  const stop = async () => {
+    console.log('Stopping generation.');
+    await workerApi.interrupt();
     setState(s => ({ ...s, status: 'ready' }));
-  }, [state.status, state.currentModel]);
-  const stop = useCallback(() => {
-    console.log('[Mock] Stopping generation.');
-    setState(s => ({ ...s, status: 'ready' }));
-  }, []);
-  const value = { ...state, initialize, generate, stop };
+  };
+  const value = { ...state, isAvailable: isGpuSupported, initialize, generate, stop };
   return (
     <LocalEngineContext.Provider value={value}>
       {children}
     </LocalEngineContext.Provider>
   );
-}
-export function useLocalEngine(): LocalEngineContextType {
-  const context = useContext(LocalEngineContext);
-  if (!context) {
-    throw new Error('useLocalEngine must be used within a LocalEngineProvider');
-  }
-  return context;
 }
