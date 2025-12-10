@@ -17,6 +17,7 @@
     "@dnd-kit/sortable": "^10.0.0",
     "@headlessui/react": "^2.2.4",
     "@hookform/resolvers": "^5.1.1",
+    "@mlc-ai/web-llm": "^0.2.80",
     "@modelcontextprotocol/sdk": "^1.16.0",
     "@modelcontextprotocol/server-filesystem": "^2025.7.1",
     "@radix-ui/react-accordion": "^1.2.11",
