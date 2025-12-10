@@ -77,7 +77,12 @@ function updateWranglerJsonc() {
 }
 
 function runSetupCommands() {
-    const commands = [];
+    const commands = [
+    "bun add localforage@^1.10.0",
+    "bun add react-dropzone@^14.2.3",
+    "bun add comlink@^4.4.1",
+    "bun add web-streams-polyfill@^4.0.1"
+];
     
     if (commands.length === 0) {
         console.log('⊘ No setup commands to run');
