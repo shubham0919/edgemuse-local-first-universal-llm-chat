@@ -1,4 +1,5 @@
 import localforage from 'localforage';
+import '@/types/navigator.d.ts';
 export interface LocalModel {
   id: string; // Corresponds to web-llm's local_id
   name: string;
@@ -58,11 +59,25 @@ export function formatModelSize(bytes: number): string {
   return parseFloat((bytes / Math.pow(k, i)).toFixed(2)) + ' ' + sizes[i];
 }
 export async function supportsWebGPU(): Promise<boolean> {
-  // FIX: Safely check for navigator.gpu before attempting to use it.
-  if (!navigator.gpu) {
+  try {
+    if (!navigator.gpu) return false;
+    const adapter = await navigator.gpu.requestAdapter();
+    return adapter !== null;
+  } catch (e) {
+    console.error("Error checking WebGPU support:", e);
     return false;
   }
-  return await navigator.gpu.requestAdapter() != null;
+}
+export async function getStorageEstimate(): Promise<{ usage: number; quota: number } | null> {
+  if (navigator.storage && navigator.storage.estimate) {
+    try {
+      return await navigator.storage.estimate();
+    } catch (error) {
+      console.error("Could not estimate storage:", error);
+      return null;
+    }
+  }
+  return null;
 }
 export function estimateRamForModel(modelSize: number): number {
   // A rough estimate: model size + ~50% overhead for context, KV cache, etc.

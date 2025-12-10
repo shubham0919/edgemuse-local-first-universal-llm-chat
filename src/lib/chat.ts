@@ -13,15 +13,19 @@ export const MODELS = [
 export type InferenceMode = 'local' | 'edge' | 'hybrid';
 const offlineStore = localforage.createInstance({
   name: 'EdgeMuseDB',
-  storeName: 'offlineChats',
+  storeName: 'offlineData',
 });
 class ChatService {
   private sessionId: string;
   private baseUrl: string;
   public inferenceMode: InferenceMode = 'hybrid';
   constructor() {
-    this.sessionId = crypto.randomUUID();
+    this.sessionId = localStorage.getItem('edge-muse-last-session') || crypto.randomUUID();
     this.baseUrl = `/api/chat/${this.sessionId}`;
+    this.saveLastSession();
+  }
+  private saveLastSession() {
+    localStorage.setItem('edge-muse-last-session', this.sessionId);
   }
   setInferenceMode(mode: InferenceMode) {
     this.inferenceMode = mode;
@@ -107,10 +111,10 @@ class ChatService {
     }
   }
   async cacheMessages(sessionId: string, state: ChatState): Promise<void> {
-    await offlineStore.setItem(sessionId, { state, timestamp: Date.now() });
+    await offlineStore.setItem(`chat_${sessionId}`, { state, timestamp: Date.now() });
   }
   async loadCachedMessages(sessionId: string): Promise<ChatState | null> {
-    const data = await offlineStore.getItem<{ state: ChatState; timestamp: number }>(sessionId);
+    const data = await offlineStore.getItem<{ state: ChatState; timestamp: number }>(`chat_${sessionId}`);
     if (data && (Date.now() - data.timestamp < 24 * 60 * 60 * 1000)) { // 24h TTL
       return data.state;
     }
@@ -130,10 +134,12 @@ class ChatService {
   newSession(): void {
     this.sessionId = crypto.randomUUID();
     this.baseUrl = `/api/chat/${this.sessionId}`;
+    this.saveLastSession();
   }
   switchSession(sessionId: string): void {
     this.sessionId = sessionId;
     this.baseUrl = `/api/chat/${sessionId}`;
+    this.saveLastSession();
   }
   async createSession(title?: string, sessionId?: string, firstMessage?: string): Promise<{ success: boolean; data?: { sessionId: string; title: string }; error?: string }> {
     try {
@@ -150,8 +156,16 @@ class ChatService {
   async listSessions(): Promise<{ success: boolean; data?: SessionInfo[]; error?: string }> {
     try {
       const response = await fetch('/api/sessions');
-      return await response.json();
+      const result = await response.json();
+      if (result.success && result.data) {
+        await offlineStore.setItem('recentSessions', result.data.slice(0, 10));
+      }
+      return result;
     } catch (error) {
+      const cachedSessions = await offlineStore.getItem<SessionInfo[]>('recentSessions');
+      if (cachedSessions) {
+        return { success: true, data: cachedSessions };
+      }
       return { success: false, error: 'Failed to list sessions' };
     }
   }
@@ -198,7 +212,7 @@ export const generateSessionTitle = (firstUserMessage?: string): string => {
   if (!firstUserMessage?.trim()) return `Chat ${dateTime}`;
   const cleanMessage = firstUserMessage.trim().replace(/\s+/g, ' ');
   const truncated = cleanMessage.length > 40 ? cleanMessage.slice(0, 37) + '...' : cleanMessage;
-  return `${truncated} • ${dateTime}`;
+  return `${truncated}`;
 };
 export const renderToolCall = (toolCall: ToolCall): string => {
   const result = toolCall.result as WeatherResult | MCPResult | ErrorResult | undefined;

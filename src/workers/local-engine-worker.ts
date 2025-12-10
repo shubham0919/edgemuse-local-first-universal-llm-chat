@@ -15,12 +15,12 @@ const localEngine = {
     try {
       if (!engine) {
         engine = new webllm.MLCEngine();
-        engine.setInitProgressCallback(progressCallback);
       }
+      engine.setInitProgressCallback(progressCallback);
       await engine.reload(modelId, undefined, appConfig);
     } catch (e) {
       console.error("Initialization error in worker:", e);
-      throw e;
+      throw new Error(`Worker error: ${e instanceof Error ? e.message : String(e)}`);
     }
   },
   async generate(prompt: string, onToken: (token: string) => void) {
@@ -38,10 +38,10 @@ const localEngine = {
           onToken(token);
         }
       }
-      await engine.interruptGenerate();
+      // Generation is complete, no need to interrupt unless requested.
     } catch (e) {
       console.error("Generation error in worker:", e);
-      throw e;
+      throw new Error(`Worker error: ${e instanceof Error ? e.message : String(e)}`);
     }
   },
   async interrupt() {
