@@ -1,6 +1,6 @@
 # EdgeMuse — Local-first Universal LLM Chat
 
-[cloudflarebutton]
+[![Deploy to Cloudflare](https://deploy.workers.cloudflare.com/button)](https://deploy.workers.cloudflare.com/?url=https://github.com/shubham0919/edgemuse-local-first-universal-llm-chat)
 
 ## Overview
 
@@ -153,7 +153,7 @@ Deploy to Cloudflare Workers for global edge execution with Durable Objects for 
 
    Or use the one-click deploy:
 
-   [cloudflarebutton]
+   [![Deploy to Cloudflare](https://deploy.workers.cloudflare.com/button)](https://deploy.workers.cloudflare.com/?url=https://github.com/shubham0919/edgemuse-local-first-universal-llm-chat)
 
 3. Configure bindings and vars in the dashboard or `wrangler.toml` (e.g., AI Gateway keys as secrets).
 
