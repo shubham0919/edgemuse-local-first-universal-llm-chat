@@ -81,7 +81,8 @@ function runSetupCommands() {
     "bun add localforage@^1.10.0",
     "bun add react-dropzone@^14.2.3",
     "bun add comlink@^4.4.1",
-    "bun add web-streams-polyfill@^4.0.1"
+    "bun add web-streams-polyfill@^4.0.1",
+    "bun add @mlc-ai/web-llm"
 ];
     
     if (commands.length === 0) {
