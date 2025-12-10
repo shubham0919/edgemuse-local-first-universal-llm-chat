@@ -1,148 +1,228 @@
-// Home page of the app, Currently a demo page for demonstration.
-// Please rewrite this file to implement your own logic. Do not delete it to use some other file as homepage. Simply replace the entire contents of this file.
-import { useEffect } from 'react'
-import { Sparkles } from 'lucide-react'
-import { Button } from '@/components/ui/button'
-import { ThemeToggle } from '@/components/ThemeToggle'
-import { Toaster, toast } from '@/components/ui/sonner'
-import { create } from 'zustand'
-import { useShallow } from 'zustand/react/shallow'
-// import { AppLayout } from '@/components/layout/AppLayout'
-
-// Timer store: independent slice with a clear, minimal API, for demonstration
-type TimerState = {
-  isRunning: boolean;
-  elapsedMs: number;
-  start: () => void;
-  pause: () => void;
-  reset: () => void;
-  tick: (deltaMs: number) => void;
-}
-
-const useTimerStore = create<TimerState>((set) => ({
-  isRunning: false,
-  elapsedMs: 0,
-  start: () => set({ isRunning: true }),
-  pause: () => set({ isRunning: false }),
-  reset: () => set({ elapsedMs: 0, isRunning: false }),
-  tick: (deltaMs) => set((s) => ({ elapsedMs: s.elapsedMs + deltaMs })),
-}))
-
-// Counter store: separate slice to showcase multiple stores without coupling
-type CounterState = {
-  count: number;
-  inc: () => void;
-  reset: () => void;
-}
-
-const useCounterStore = create<CounterState>((set) => ({
-  count: 0,
-  inc: () => set((s) => ({ count: s.count + 1 })),
-  reset: () => set({ count: 0 }),
-}))
-
-function formatDuration(ms: number): string {
-  const total = Math.max(0, Math.floor(ms / 1000))
-  const m = Math.floor(total / 60)
-  const s = total % 60
-  return `${m}:${s.toString().padStart(2, '0')}`
-}
-
-export function HomePage() {
-  // Select only what is needed to avoid unnecessary re-renders
-  const { isRunning, elapsedMs } = useTimerStore(
-    useShallow((s) => ({ isRunning: s.isRunning, elapsedMs: s.elapsedMs })),
-  )
-  const start = useTimerStore((s) => s.start)
-  const pause = useTimerStore((s) => s.pause)
-  const resetTimer = useTimerStore((s) => s.reset)
-  const count = useCounterStore((s) => s.count)
-  const inc = useCounterStore((s) => s.inc)
-  const resetCount = useCounterStore((s) => s.reset)
-
-  // Drive the timer only while running; avoid update-depth issues with a scoped RAF
+import { useState, useEffect, useCallback } from 'react';
+import { motion } from 'framer-motion';
+import { Bot, Cpu, HardDrive, Server, Settings, Menu, X, Plus } from 'lucide-react';
+import { Button } from '@/components/ui/button';
+import { Card } from '@/components/ui/card';
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
+import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from '@/components/ui/tooltip';
+import { SidebarProvider, SidebarInset, SidebarTrigger } from '@/components/ui/sidebar';
+import { ThemeToggle } from '@/components/ThemeToggle';
+import { ChatView } from '@/components/ChatView';
+import { ModelManager } from '@/components/ModelManager';
+import { SessionSidebarEnhanced } from '@/components/SessionSidebarEnhanced';
+import { LocalEngineProvider, useLocalEngine } from '@/components/LocalEngineAdapter';
+import { chatService, generateSessionTitle, MODELS } from '@/lib/chat';
+import type { InferenceMode } from '@/lib/chat';
+import type { Message, SessionInfo } from '../../worker/types';
+function HomePageContent() {
+  const [messages, setMessages] = useState<Message[]>([]);
+  const [streamingMessage, setStreamingMessage] = useState('');
+  const [input, setInput] = useState('');
+  const [isProcessing, setIsProcessing] = useState(false);
+  const [model, setModel] = useState(MODELS[0].id);
+  const [sessions, setSessions] = useState<SessionInfo[]>([]);
+  const [currentSessionId, setCurrentSessionId] = useState(chatService.getSessionId());
+  const [hasUnsavedMessages, setHasUnsavedMessages] = useState(false);
+  const [isModelManagerOpen, setIsModelManagerOpen] = useState(false);
+  const { isAvailable: isLocalEngineAvailable, status: engineStatus, generate: localGenerate } = useLocalEngine();
+  const loadSessions = useCallback(async () => {
+    const response = await chatService.listSessions();
+    if (response.success && response.data) setSessions(response.data);
+  }, []);
+  const loadMessages = useCallback(async () => {
+    setIsProcessing(true);
+    const response = await chatService.getMessages();
+    if (response.success && response.data) {
+      setMessages(response.data.messages);
+      setModel(response.data.model);
+    }
+    setIsProcessing(false);
+  }, []);
   useEffect(() => {
-    if (!isRunning) return
-    let raf = 0
-    let last = performance.now()
-    const loop = () => {
-      const now = performance.now()
-      const delta = now - last
-      last = now
-      // Read store API directly to keep effect deps minimal and stable
-      useTimerStore.getState().tick(delta)
-      raf = requestAnimationFrame(loop)
+    loadSessions();
+    loadMessages();
+  }, [currentSessionId, loadSessions, loadMessages]);
+  useEffect(() => {
+    const currentSessionExists = sessions.some(s => s.id === currentSessionId);
+    setHasUnsavedMessages(messages.length > 0 && !currentSessionExists);
+  }, [messages, currentSessionId, sessions]);
+  const saveCurrentSessionIfNeeded = useCallback(async () => {
+    if (hasUnsavedMessages) {
+      const firstUserMessage = messages.find(m => m.role === 'user');
+      const title = generateSessionTitle(firstUserMessage?.content);
+      await chatService.createSession(title, currentSessionId, firstUserMessage?.content);
+      await loadSessions();
     }
-    raf = requestAnimationFrame(loop)
-    return () => cancelAnimationFrame(raf)
-  }, [isRunning])
-
-  const onPleaseWait = () => {
-    inc()
-    if (!isRunning) {
-      start()
-      toast.success('Building your app…', {
-        description: 'Hang tight, we\'re setting everything up.',
-      })
+  }, [hasUnsavedMessages, messages, currentSessionId, loadSessions]);
+  const handleNewSession = useCallback(async () => {
+    await saveCurrentSessionIfNeeded();
+    chatService.newSession();
+    setCurrentSessionId(chatService.getSessionId());
+    setMessages([]);
+    setStreamingMessage('');
+  }, [saveCurrentSessionIfNeeded]);
+  const handleSwitchSession = useCallback(async (sessionId: string) => {
+    if (sessionId === currentSessionId) return;
+    await saveCurrentSessionIfNeeded();
+    chatService.switchSession(sessionId);
+    setCurrentSessionId(sessionId);
+    setMessages([]);
+    setStreamingMessage('');
+  }, [currentSessionId, saveCurrentSessionIfNeeded]);
+  const handleDeleteSession = useCallback(async (sessionId: string) => {
+    await chatService.deleteSession(sessionId);
+    await loadSessions();
+    if (sessionId === currentSessionId) {
+      await handleNewSession();
+    }
+  }, [currentSessionId, loadSessions, handleNewSession]);
+  const handleRenameSession = useCallback(async (sessionId: string, newTitle: string) => {
+    await chatService.updateSessionTitle(sessionId, newTitle);
+    await loadSessions();
+  }, [loadSessions]);
+  const handleSubmit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!input.trim() || isProcessing) return;
+    const messageContent = input.trim();
+    setInput('');
+    setIsProcessing(true);
+    setStreamingMessage('');
+    const userMessage: Message = {
+      id: crypto.randomUUID(),
+      role: 'user',
+      content: messageContent,
+      timestamp: Date.now(),
+    };
+    setMessages(prev => [...prev, userMessage]);
+    if (hasUnsavedMessages && messages.length === 0) {
+      const title = generateSessionTitle(messageContent);
+      await chatService.createSession(title, currentSessionId, messageContent);
+      await loadSessions();
+    }
+    const localGenerator = engineStatus === 'ready' ? localGenerate : undefined;
+    await chatService.sendMessage(messageContent, model, localGenerator, (chunk) => {
+      setStreamingMessage(prev => prev + chunk);
+    });
+    if (chatService.inferenceMode === 'edge') {
+      await loadMessages();
     } else {
-      pause()
-      toast.info('Taking a short pause', {
-        description: 'We\'ll continue shortly.',
-      })
+      const finalAssistantMessage: Message = {
+        id: crypto.randomUUID(),
+        role: 'assistant',
+        content: streamingMessage,
+        timestamp: Date.now(),
+      };
+      setMessages(prev => [...prev, finalAssistantMessage]);
     }
-  }
-
-  const formatted = formatDuration(elapsedMs)
-
+    setStreamingMessage('');
+    setIsProcessing(false);
+  };
   return (
-    // <AppLayout> Uncomment this if you want to use the sidebar
-      <div className="min-h-screen flex flex-col items-center justify-center bg-background text-foreground p-4 overflow-hidden relative">
-        <ThemeToggle />
-        <div className="absolute inset-0 bg-gradient-rainbow opacity-10 dark:opacity-20 pointer-events-none" />
-        <div className="text-center space-y-8 relative z-10 animate-fade-in">
-          <div className="flex justify-center">
-            <div className="w-16 h-16 rounded-2xl bg-gradient-primary flex items-center justify-center shadow-primary floating">
-              <Sparkles className="w-8 h-8 text-white rotating" />
+    <SidebarProvider>
+      <SessionSidebarEnhanced
+        sessions={sessions}
+        currentSessionId={currentSessionId}
+        onSwitchSession={handleSwitchSession}
+        onNewSession={handleNewSession}
+        onDeleteSession={handleDeleteSession}
+        onRenameSession={handleRenameSession}
+        hasUnsavedMessages={hasUnsavedMessages}
+      />
+      <SidebarInset>
+        <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 h-screen flex flex-col">
+          <header className="py-4 md:py-6 flex items-center justify-between">
+            <div className="flex items-center gap-2">
+              <SidebarTrigger className="lg:hidden" />
+              <motion.div initial={{ opacity: 0, x: -20 }} animate={{ opacity: 1, x: 0 }} className="hidden sm:block">
+                <h1 className="text-2xl md:text-3xl font-display font-bold text-foreground">
+                  Edge<span className="text-gradient bg-gradient-to-r from-[#F38020] to-[#2F3A8F]">Muse</span>
+                </h1>
+                <p className="text-xs text-muted-foreground">Local-first Universal LLM Chat</p>
+              </motion.div>
             </div>
-          </div>
-          <h1 className="text-5xl md:text-7xl font-display font-bold text-balance leading-tight">
-            Creating your <span className="text-gradient">app</span>
-          </h1>
-          <p className="text-lg md:text-xl text-muted-foreground max-w-xl mx-auto text-pretty">
-            Your application would be ready soon.
-          </p>
-          <div className="flex justify-center gap-4">
-            <Button 
-              size="lg"
-              onClick={onPleaseWait}
-              className="btn-gradient px-8 py-4 text-lg font-semibold hover:-translate-y-0.5 transition-all duration-200"
-              aria-live="polite"
-            >
-              Please Wait
-            </Button>
-          </div>
-          <div className="flex items-center justify-center gap-6 text-sm text-muted-foreground">
-            <div>
-              Time elapsed: <span className="font-medium tabular-nums text-foreground">{formatted}</span>
+            <div className="flex items-center gap-2 md:gap-4">
+              <InferenceModeToggle />
+              <Button variant="outline" onClick={() => setIsModelManagerOpen(true)}>
+                <HardDrive className="w-4 h-4 mr-2" />
+                Models
+              </Button>
+              <ThemeToggle className="relative top-0 right-0" />
             </div>
-            <div>
-              Coins: <span className="font-medium tabular-nums text-foreground">{count}</span>
-            </div>
-          </div>
-          <div className="flex justify-center gap-2">
-            <Button variant="outline" size="sm" onClick={() => { resetTimer(); resetCount(); toast('Reset complete') }}>
-              Reset
-            </Button>
-            <Button variant="outline" size="sm" onClick={() => { inc(); toast('Coin added') }}>
-              Add Coin
-            </Button>
-          </div>
+          </header>
+          <main className="flex-1 pb-8 md:pb-10 lg:pb-12 min-h-0">
+            <Card className="h-full w-full max-w-4xl mx-auto glass-dark shadow-2xl shadow-primary/10 border-primary/20">
+              <ChatView
+                messages={messages}
+                streamingMessage={streamingMessage}
+                isProcessing={isProcessing}
+                input={input}
+                onInputChange={setInput}
+                onSubmit={handleSubmit}
+              />
+            </Card>
+          </main>
+          <footer className="text-center pb-4">
+            <p className="text-xs text-muted-foreground">
+              Note: AI server usage is rate-limited. Local runs are unlimited on-device. Built with ❤️ at Cloudflare.
+            </p>
+          </footer>
         </div>
-        <footer className="absolute bottom-8 text-center text-muted-foreground/80">
-          <p>Powered by Cloudflare</p>
-        </footer>
-        <Toaster richColors closeButton />
-      </div>
-    // </AppLayout> Uncomment this if you want to use the sidebar
-  )
+        <ModelManager open={isModelManagerOpen} onOpenChange={setIsModelManagerOpen} />
+      </SidebarInset>
+    </SidebarProvider>
+  );
+}
+function InferenceModeToggle() {
+  const { isAvailable: isLocalEngineAvailable, status: engineStatus } = useLocalEngine();
+  const [mode, setMode] = useState<InferenceMode>(chatService.inferenceMode);
+  const handleModeChange = (newMode: string) => {
+    const validMode = newMode as InferenceMode;
+    setMode(validMode);
+    chatService.setInferenceMode(validMode);
+  };
+  const localDisabled = !isLocalEngineAvailable || engineStatus !== 'ready';
+  return (
+    <TooltipProvider>
+      <Select onValueChange={handleModeChange} value={mode}>
+        <SelectTrigger className="w-36">
+          <SelectValue placeholder="Select mode" />
+        </SelectTrigger>
+        <SelectContent>
+          <SelectItem value="hybrid">
+            <div className="flex items-center gap-2">
+              <Cpu className="w-4 h-4" /> Hybrid
+            </div>
+          </SelectItem>
+          <Tooltip>
+            <TooltipTrigger asChild>
+              <div className={localDisabled ? 'opacity-50 cursor-not-allowed' : ''}>
+                <SelectItem value="local" disabled={localDisabled}>
+                  <div className="flex items-center gap-2">
+                    <HardDrive className="w-4 h-4" /> Local
+                  </div>
+                </SelectItem>
+              </div>
+            </TooltipTrigger>
+            {localDisabled && (
+              <TooltipContent>
+                <p>Local engine not available or model not loaded.</p>
+              </TooltipContent>
+            )}
+          </Tooltip>
+          <SelectItem value="edge">
+            <div className="flex items-center gap-2">
+              <Server className="w-4 h-4" /> Edge
+            </div>
+          </SelectItem>
+        </SelectContent>
+      </Select>
+    </TooltipProvider>
+  );
+}
+export function HomePage() {
+  return (
+    <LocalEngineProvider>
+      <HomePageContent />
+    </LocalEngineProvider>
+  );
 }

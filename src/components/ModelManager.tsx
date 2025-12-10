@@ -1,161 +1,124 @@
-import { useState, useEffect, useCallback } from 'react';
-import { Cpu, MemoryStick, Trash2, Wand2, Download, RotateCw, AlertTriangle } from 'lucide-react';
+import { useState, useCallback } from 'react';
+import { UploadCloud, Cpu, MemoryStick, Trash2, Wand2, CheckCircle, XCircle } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Sheet, SheetContent, SheetHeader, SheetTitle, SheetDescription, SheetFooter } from '@/components/ui/sheet';
+import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import { Badge } from '@/components/ui/badge';
 import { Progress } from '@/components/ui/progress';
-import { Skeleton } from '@/components/ui/skeleton';
-import { useLocalEngine } from '@/hooks/useLocalEngine';
-import {
-  RECOMMENDED_MODELS,
-  formatModelSize,
-  estimateRamForModel,
-  listLocalModels,
-  saveModelInfo,
-  removeModel,
-  clearAllModels,
-} from '@/lib/local-model';
+import { useDropzone } from 'react-dropzone';
+import { useLocalEngine } from './LocalEngineAdapter';
+import { RECOMMENDED_MODELS, formatModelSize, addUserModel, listUserModels, removeUserModel } from '@/lib/local-model';
 import type { LocalModel } from '@/lib/local-model';
-import { toast } from '@/components/ui/sonner';
 interface ModelManagerProps {
   open: boolean;
   onOpenChange: (open: boolean) => void;
 }
 export function ModelManager({ open, onOpenChange }: ModelManagerProps) {
-  const { initialize, status: engineStatus, currentModel, initProgress } = useLocalEngine();
-  const [localModels, setLocalModels] = useState<LocalModel[]>([]);
-  const [isLoading, setIsLoading] = useState(true);
-  const refreshModels = useCallback(async () => {
-    setIsLoading(true);
-    const models = await listLocalModels();
-    setLocalModels(models);
-    setIsLoading(false);
+  const { initialize, status: engineStatus, currentModel } = useLocalEngine();
+  const [userModels, setUserModels] = useState<LocalModel[]>(listUserModels());
+  const [testStatus, setTestStatus] = useState<'idle' | 'testing' | 'success' | 'error'>('idle');
+  const onDrop = useCallback((acceptedFiles: File[]) => {
+    acceptedFiles.forEach((file) => {
+      addUserModel(file);
+    });
+    setUserModels(listUserModels());
   }, []);
-  useEffect(() => {
-    if (open) {
-      refreshModels();
-    }
-  }, [open, refreshModels]);
-  const handleLoadModel = async (model: LocalModel) => {
-    toast.info(`Loading ${model.name}...`);
-    const success = await initialize(model).catch(() => false);
-    if (success) {
-      toast.success(`${model.name} loaded successfully!`);
-    } else {
-      toast.error(`Failed to load ${model.name}. Your device may not have enough memory. Try Hybrid mode.`);
-    }
+  const { getRootProps, getInputProps, isDragActive } = useDropzone({
+    onDrop,
+    accept: { 'application/octet-stream': ['.gguf'] },
+  });
+  const handleTestModel = async (model: LocalModel) => {
+    setTestStatus('testing');
+    const success = await initialize(model);
+    setTestStatus(success ? 'success' : 'error');
+    setTimeout(() => setTestStatus('idle'), 3000);
   };
-  const handleDownloadModel = async (model: LocalModel) => {
-    toast.info(`Adding ${model.name} to your local models.`);
-    await saveModelInfo(model);
-    await refreshModels();
-    toast.success(`${model.name} is available to load.`);
+  const handleRemoveModel = (id: string) => {
+    removeUserModel(id);
+    setUserModels(listUserModels());
   };
-  const handleRemoveModel = async (id: string) => {
-    await removeModel(id);
-    await refreshModels();
-    toast.success('Model removed.');
-  };
-  const handleClearCache = async () => {
-    await clearAllModels();
-    await refreshModels();
-    toast.success('All local model metadata cleared.');
-  };
+  const totalStorage = 10 * 1024 * 1024 * 1024; // Mock 10GB total
+  const usedStorage = userModels.reduce((acc, model) => acc + model.size, 0);
+  const storagePercentage = (usedStorage / totalStorage) * 100;
   return (
-    <>
-      
-      <Sheet open={open} onOpenChange={onOpenChange}>
-        <SheetContent className="w-full sm:max-w-2xl p-0">
-          <SheetHeader className="p-6 border-b">
-            <SheetTitle className="text-2xl font-display">Model Manager</SheetTitle>
-            <SheetDescription>Manage local models that run directly on your device via WebLLM.</SheetDescription>
-          </SheetHeader>
-          <div className="p-6 space-y-6">
-            <Card>
-              <CardHeader>
-                <CardTitle>Available Models</CardTitle>
-                <CardDescription>Select a model to load it into the local engine.</CardDescription>
-              </CardHeader>
-              <CardContent className="space-y-4">
-                <h3 className="text-sm font-semibold text-muted-foreground">Recommended Models</h3>
-                {RECOMMENDED_MODELS.map((model) => (
-                  <ModelCard
-                    key={model.id}
-                    model={model}
-                    onLoad={handleLoadModel}
-                    onDownload={handleDownloadModel}
-                    isDownloaded={localModels.some(m => m.id === model.id)}
-                    isLoading={engineStatus === 'initializing' && currentModel?.id === model.id}
-                    isCurrent={currentModel?.id === model.id && engineStatus === 'ready'}
-                    progress={engineStatus === 'initializing' && currentModel?.id === model.id ? initProgress : 0}
-                  />
-                ))}
-                <h3 className="text-sm font-semibold text-muted-foreground pt-4">Your Local Models</h3>
-                {isLoading ? (
-                  <Skeleton className="h-24 w-full" />
-                ) : localModels.length > 0 ? (
-                  localModels.map((model) => (
-                    <ModelCard
-                      key={model.id}
-                      model={model}
-                      onLoad={handleLoadModel}
-                      onRemove={handleRemoveModel}
-                      isDownloaded={true}
-                      isLoading={engineStatus === 'initializing' && currentModel?.id === model.id}
-                      isCurrent={currentModel?.id === model.id && engineStatus === 'ready'}
-                      progress={engineStatus === 'initializing' && currentModel?.id === model.id ? initProgress : 0}
-                    />
-                  ))
-                ) : (
-                  <p className="text-center text-sm text-muted-foreground py-4">No local models added yet.</p>
-                )}
-              </CardContent>
-            </Card>
-          </div>
-          <SheetFooter className="p-6 border-t flex justify-between items-center">
-            <p className="text-xs text-muted-foreground">
-              Models are downloaded and cached by your browser.
-            </p>
-            <Button variant="outline" size="sm" onClick={handleClearCache}>
-              <Trash2 className="w-4 h-4 mr-2" />
-              Clear Metadata
-            </Button>
-          </SheetFooter>
-        </SheetContent>
-      </Sheet>
-    </>
+    <Sheet open={open} onOpenChange={onOpenChange}>
+      <SheetContent className="w-full sm:max-w-2xl p-0">
+        <SheetHeader className="p-6 border-b">
+          <SheetTitle className="text-2xl font-display">Model Manager</SheetTitle>
+          <SheetDescription>Manage local models that run directly on your device.</SheetDescription>
+        </SheetHeader>
+        <div className="p-6 space-y-6">
+          <Card>
+            <CardHeader>
+              <CardTitle>Local Storage</CardTitle>
+              <CardDescription>Models you upload are stored in your browser.</CardDescription>
+            </CardHeader>
+            <CardContent>
+              <div className="space-y-2">
+                <Progress value={storagePercentage} />
+                <p className="text-sm text-muted-foreground">
+                  {formatModelSize(usedStorage)} of {formatModelSize(totalStorage)} used
+                </p>
+              </div>
+            </CardContent>
+          </Card>
+          <Tabs defaultValue="recommended">
+            <TabsList className="grid w-full grid-cols-2">
+              <TabsTrigger value="recommended">Recommended</TabsTrigger>
+              <TabsTrigger value="user">My Models</TabsTrigger>
+            </TabsList>
+            <TabsContent value="recommended" className="mt-4 space-y-4">
+              {RECOMMENDED_MODELS.map((model) => (
+                <ModelCard key={model.id} model={model} onTest={handleTestModel} testStatus={testStatus} currentModel={currentModel} engineStatus={engineStatus} />
+              ))}
+            </TabsContent>
+            <TabsContent value="user" className="mt-4 space-y-4">
+              <div {...getRootProps()} className={`p-8 border-2 border-dashed rounded-lg text-center cursor-pointer transition-colors ${isDragActive ? 'border-primary bg-primary/10' : 'border-border'}`}>
+                <input {...getInputProps()} />
+                <UploadCloud className="mx-auto h-12 w-12 text-muted-foreground" />
+                <p className="mt-2 text-sm text-muted-foreground">Drag & drop a .gguf model file here, or click to select</p>
+              </div>
+              {userModels.length > 0 ? (
+                userModels.map((model) => (
+                  <ModelCard key={model.id} model={model} onTest={handleTestModel} onRemove={handleRemoveModel} testStatus={testStatus} currentModel={currentModel} engineStatus={engineStatus} />
+                ))
+              ) : (
+                <p className="text-center text-sm text-muted-foreground py-4">You haven't uploaded any models yet.</p>
+              )}
+            </TabsContent>
+          </Tabs>
+        </div>
+        <SheetFooter className="p-6 border-t">
+          <p className="text-xs text-muted-foreground">
+            Model files must respect their original licenses. Large models may not run on all devices.
+          </p>
+        </SheetFooter>
+      </SheetContent>
+    </Sheet>
   );
 }
-function ModelCard({ model, onLoad, onRemove, onDownload, isDownloaded, isLoading, isCurrent, progress }: { model: LocalModel; onLoad: (model: LocalModel) => void; onRemove?: (id: string) => void; onDownload?: (model: LocalModel) => void; isDownloaded: boolean; isLoading: boolean; isCurrent: boolean; progress: number; }) {
+function ModelCard({ model, onTest, onRemove, testStatus, currentModel, engineStatus }: { model: LocalModel; onTest: (model: LocalModel) => void; onRemove?: (id: string) => void; testStatus: 'idle' | 'testing' | 'success' | 'error'; currentModel: LocalModel | null; engineStatus: string; }) {
+  const isCurrent = currentModel?.id === model.id;
+  const isReady = isCurrent && engineStatus === 'ready';
   return (
-    <Card className="flex flex-col sm:flex-row items-start sm:items-center justify-between p-4 gap-4 transition-all hover:shadow-md">
+    <Card className="flex flex-col sm:flex-row items-start sm:items-center justify-between p-4 gap-4">
       <div className="flex-1">
-        <h3 className="font-semibold flex items-center gap-2">
-          {model.name}
-          {isCurrent && <Badge variant="secondary" className="bg-green-100 text-green-800 dark:bg-green-900 dark:text-green-200">Loaded</Badge>}
-        </h3>
-        <div className="flex flex-wrap items-center gap-x-4 gap-y-1 text-sm text-muted-foreground mt-1">
+        <h3 className="font-semibold">{model.name} {isReady && <Badge variant="secondary" className="ml-2 bg-green-100 text-green-800 dark:bg-green-900 dark:text-green-200">Loaded</Badge>}</h3>
+        <div className="flex items-center gap-4 text-sm text-muted-foreground mt-1">
           <span className="flex items-center gap-1"><Cpu className="w-4 h-4" /> {model.family}</span>
-          <span className="flex items-center gap-1"><MemoryStick className="w-4 h-4" /> {formatModelSize(estimateRamForModel(model.size))} RAM</span>
-          <Badge variant="outline" className="font-mono text-xs">{model.quantization}</Badge>
+          <span className="flex items-center gap-1"><MemoryStick className="w-4 h-4" /> {formatModelSize(model.size)}</span>
         </div>
-        {isLoading && <Progress value={progress} className="mt-2 h-1" />}
       </div>
-      <div className="flex items-center gap-2 self-start sm:self-center">
-        {isDownloaded ? (
-          <Button variant="outline" size="sm" onClick={() => onLoad(model)} disabled={isLoading || isCurrent}>
-            {isLoading ? <RotateCw className="w-4 h-4 mr-2 animate-spin" /> : <Wand2 className="w-4 h-4 mr-2" />}
-            {isLoading ? 'Loading...' : isCurrent ? 'Loaded' : 'Load Model'}
-          </Button>
-        ) : onDownload && (
-          <Button variant="outline" size="sm" onClick={() => onDownload(model)}>
-            <Download className="w-4 h-4 mr-2" />
-            Add to Local
-          </Button>
-        )}
+      <div className="flex items-center gap-2">
+        <Button variant="outline" size="sm" onClick={() => onTest(model)} disabled={testStatus === 'testing'}>
+          {testStatus === 'testing' && <Wand2 className="w-4 h-4 mr-2 animate-pulse" />}
+          {testStatus === 'success' && <CheckCircle className="w-4 h-4 mr-2 text-green-500" />}
+          {testStatus === 'error' && <XCircle className="w-4 h-4 mr-2 text-red-500" />}
+          Test Model
+        </Button>
         {onRemove && (
-          <Button variant="ghost" size="icon" onClick={() => onRemove(model.id)} className="text-muted-foreground hover:text-destructive">
+          <Button variant="ghost" size="icon" onClick={() => onRemove(model.id)}>
             <Trash2 className="w-4 h-4" />
           </Button>
         )}
