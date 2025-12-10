@@ -1,3 +1,4 @@
+import localforage from 'localforage';
 import type { Message, ChatState, ToolCall, WeatherResult, MCPResult, ErrorResult, SessionInfo } from '../../worker/types';
 export interface ChatResponse {
   success: boolean;
@@ -10,6 +11,10 @@ export const MODELS = [
   { id: 'google-ai-studio/gemini-2.0-flash', name: 'Gemini 2.0 Flash' },
 ];
 export type InferenceMode = 'local' | 'edge' | 'hybrid';
+const offlineStore = localforage.createInstance({
+  name: 'EdgeMuseDB',
+  storeName: 'offlineChats',
+});
 class ChatService {
   private sessionId: string;
   private baseUrl: string;
@@ -24,42 +29,46 @@ class ChatService {
   async sendMessage(
     message: string,
     model: string,
-    localGenerate?: (prompt: string, onToken: (chunk: string) => void) => Promise<void>,
+    options: { temperature?: number; maxTokens?: number },
+    localGenerate?: (prompt: string, onToken: (chunk: string) => void, options?: { temperature?: number; maxTokens?: number }) => Promise<void>,
     onChunk?: (chunk: string) => void
   ): Promise<ChatResponse> {
     const useLocal = this.inferenceMode !== 'edge' && localGenerate;
+    if (!navigator.onLine) {
+      return { success: false, error: "You are offline. Please check your connection." };
+    }
     if (useLocal) {
       try {
         await localGenerate(message, (chunk) => {
           if (onChunk) onChunk(chunk);
-        });
-        // In phase 1, local generation doesn't return a full ChatState, so we return success.
-        // The UI will manage appending the streamed message.
+        }, options);
         return { success: true };
       } catch (error) {
         console.error('Local generation failed:', error);
         if (this.inferenceMode === 'hybrid') {
           console.log('Falling back to edge inference.');
-          return this.sendToEdge(message, model, onChunk);
+          return this.sendToEdge(message, model, options, onChunk);
         }
-        return { success: false, error: 'Local generation failed' };
+        return { success: false, error: 'Local generation failed. Check model manager or switch to Edge/Hybrid mode.' };
       }
     }
-    return this.sendToEdge(message, model, onChunk);
+    return this.sendToEdge(message, model, options, onChunk);
   }
   private async sendToEdge(
     message: string,
     model: string,
+    options: { temperature?: number; maxTokens?: number },
     onChunk?: (chunk: string) => void
   ): Promise<ChatResponse> {
     try {
       const response = await fetch(`${this.baseUrl}/chat`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ message, model, stream: !!onChunk }),
+        body: JSON.stringify({ message, model, stream: !!onChunk, ...options }),
       });
       if (!response.ok) {
-        throw new Error(`HTTP ${response.status}`);
+        const errorData = await response.json().catch(() => ({ error: `HTTP ${response.status}` }));
+        throw new Error(errorData.error || `HTTP ${response.status}`);
       }
       if (onChunk && response.body) {
         const reader = response.body.getReader();
@@ -75,18 +84,37 @@ class ChatService {
       return await response.json();
     } catch (error) {
       console.error('Failed to send message to edge:', error);
-      return { success: false, error: 'Failed to send message' };
+      return { success: false, error: error instanceof Error ? error.message : 'Failed to send message' };
     }
   }
   async getMessages(): Promise<ChatResponse> {
+    if (!navigator.onLine) {
+      const cached = await this.loadCachedMessages(this.sessionId);
+      if (cached) return { success: true, data: cached };
+      return { success: false, error: "You are offline and no cached messages are available." };
+    }
     try {
       const response = await fetch(`${this.baseUrl}/messages`);
       if (!response.ok) throw new Error(`HTTP ${response.status}`);
-      return await response.json();
+      const result = await response.json();
+      if (result.success && result.data) {
+        await this.cacheMessages(this.sessionId, result.data);
+      }
+      return result;
     } catch (error) {
       console.error('Failed to get messages:', error);
       return { success: false, error: 'Failed to load messages' };
     }
+  }
+  async cacheMessages(sessionId: string, state: ChatState): Promise<void> {
+    await offlineStore.setItem(sessionId, { state, timestamp: Date.now() });
+  }
+  async loadCachedMessages(sessionId: string): Promise<ChatState | null> {
+    const data = await offlineStore.getItem<{ state: ChatState; timestamp: number }>(sessionId);
+    if (data && (Date.now() - data.timestamp < 24 * 60 * 60 * 1000)) { // 24h TTL
+      return data.state;
+    }
+    return null;
   }
   async clearMessages(): Promise<ChatResponse> {
     try {
@@ -98,9 +126,7 @@ class ChatService {
       return { success: false, error: 'Failed to clear messages' };
     }
   }
-  getSessionId(): string {
-    return this.sessionId;
-  }
+  getSessionId(): string { return this.sessionId; }
   newSession(): void {
     this.sessionId = crypto.randomUUID();
     this.baseUrl = `/api/chat/${this.sessionId}`;
@@ -178,7 +204,10 @@ export const renderToolCall = (toolCall: ToolCall): string => {
   const result = toolCall.result as WeatherResult | MCPResult | ErrorResult | undefined;
   if (!result) return `⚠️ ${toolCall.name}: No result`;
   if ('error' in result) return `❌ ${toolCall.name}: ${result.error}`;
-  if ('content' in result) return `🔧 ${toolCall.name}: Executed`;
+  if ('content' in result) {
+    const content = (result.content || '').substring(0, 50);
+    return `🔧 ${toolCall.name}: ${content}...`;
+  }
   if (toolCall.name === 'get_weather') {
     const weather = result as WeatherResult;
     return `🌤️ Weather in ${weather.location}: ${weather.temperature}°C, ${weather.condition}`;

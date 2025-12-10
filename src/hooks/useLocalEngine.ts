@@ -1,5 +1,5 @@
-import { useContext } } from 'react';
-import { LocalEngineContext, LocalEngineContextType } from '@/components/LocalEngineAdapter';
+import { useContext } from 'react';
+import { LocalEngineContext, LocalEngineContextType } from '@/types/local-engine';
 export function useLocalEngine(): LocalEngineContextType {
   const context = useContext(LocalEngineContext);
   if (!context) {

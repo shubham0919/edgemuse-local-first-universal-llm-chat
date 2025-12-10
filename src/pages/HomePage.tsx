@@ -1,6 +1,6 @@
 import { useState, useEffect, useCallback } from 'react';
 import { motion } from 'framer-motion';
-import { Bot, Cpu, HardDrive, Server, Settings, Menu, X, Plus } from 'lucide-react';
+import { HardDrive, Server, Settings, Cpu } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Card } from '@/components/ui/card';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
@@ -12,22 +12,30 @@ import { ModelManager } from '@/components/ModelManager';
 import { SessionSidebarEnhanced } from '@/components/SessionSidebarEnhanced';
 import { LocalEngineProvider } from '@/components/LocalEngineAdapter';
 import { useLocalEngine } from '@/hooks/useLocalEngine';
-import { chatService, generateSessionTitle, MODELS } from '@/lib/chat';
+import { chatService, generateSessionTitle } from '@/lib/chat';
 import type { InferenceMode } from '@/lib/chat';
 import type { Message, SessionInfo } from '../../worker/types';
 import { Badge } from '@/components/ui/badge';
-import { formatModelSize, estimateRamForModel } from '@/lib/local-model';
+import { Settings as SettingsComponent } from '@/components/Settings';
+import { Toaster, toast } from 'sonner';
 function HomePageContent() {
   const [messages, setMessages] = useState<Message[]>([]);
   const [streamingMessage, setStreamingMessage] = useState('');
   const [input, setInput] = useState('');
   const [isProcessing, setIsProcessing] = useState(false);
-  const [model, setModel] = useState(MODELS[0].id);
   const [sessions, setSessions] = useState<SessionInfo[]>([]);
   const [currentSessionId, setCurrentSessionId] = useState(chatService.getSessionId());
   const [hasUnsavedMessages, setHasUnsavedMessages] = useState(false);
   const [isModelManagerOpen, setIsModelManagerOpen] = useState(false);
-  const { isAvailable: isLocalEngineAvailable, status: engineStatus, generate: localGenerate, currentModel } = useLocalEngine();
+  const [isSettingsOpen, setIsSettingsOpen] = useState(false);
+  const [advancedOptions, setAdvancedOptions] = useState(() => {
+    const saved = localStorage.getItem('advancedChatOptions');
+    return saved ? JSON.parse(saved) : { temperature: 0.7, maxTokens: 4096 };
+  });
+  const { isAvailable: isLocalEngineAvailable, status: engineStatus, generate: localGenerate, currentModel, stop: stopLocalGeneration } = useLocalEngine();
+  useEffect(() => {
+    localStorage.setItem('advancedChatOptions', JSON.stringify(advancedOptions));
+  }, [advancedOptions]);
   const loadSessions = useCallback(async () => {
     const response = await chatService.listSessions();
     if (response.success && response.data) setSessions(response.data);
@@ -37,7 +45,8 @@ function HomePageContent() {
     const response = await chatService.getMessages();
     if (response.success && response.data) {
       setMessages(response.data.messages);
-      setModel(response.data.model);
+    } else if (response.error) {
+      toast.error(response.error);
     }
     setIsProcessing(false);
   }, []);
@@ -67,11 +76,12 @@ function HomePageContent() {
   const handleSwitchSession = useCallback(async (sessionId: string) => {
     if (sessionId === currentSessionId) return;
     await saveCurrentSessionIfNeeded();
+    stopLocalGeneration();
     chatService.switchSession(sessionId);
     setCurrentSessionId(sessionId);
     setMessages([]);
     setStreamingMessage('');
-  }, [currentSessionId, saveCurrentSessionIfNeeded]);
+  }, [currentSessionId, saveCurrentSessionIfNeeded, stopLocalGeneration]);
   const handleDeleteSession = useCallback(async (sessionId: string) => {
     await chatService.deleteSession(sessionId);
     await loadSessions();
@@ -102,38 +112,33 @@ function HomePageContent() {
       await chatService.createSession(title, currentSessionId, messageContent);
       await loadSessions();
     }
-    const useLocal = chatService.inferenceMode !== 'edge' && engineStatus === 'ready';
-    try {
-      if (useLocal) {
-        await localGenerate(messageContent, (chunk) => {
-          setStreamingMessage(prev => prev + chunk);
-        });
-        const finalAssistantMessage: Message = {
+    let fullResponse = '';
+    const response = await chatService.sendMessage(
+      messageContent,
+      'google-ai-studio/gemini-2.5-flash', // Edge model, not used for local
+      advancedOptions,
+      engineStatus === 'ready' ? localGenerate : undefined,
+      (chunk) => {
+        fullResponse += chunk;
+        setStreamingMessage(fullResponse);
+      }
+    );
+    if (!response.success) {
+      toast.error(response.error || "An unknown error occurred.");
+      setMessages(prev => prev.slice(0, -1)); // Remove optimistic user message
+    } else {
+      // For edge, we need to reload messages. For local, we construct it.
+      if (chatService.inferenceMode !== 'local') {
+        await loadMessages();
+      } else {
+        const assistantMessage: Message = {
           id: crypto.randomUUID(),
           role: 'assistant',
-          content: streamingMessage + (await localGenerate(messageContent, () => {}) || ''), // a bit of a hack to get the full message
+          content: fullResponse,
           timestamp: Date.now(),
         };
-        setMessages(prev => [...prev, finalAssistantMessage]);
-      } else {
-        if (chatService.inferenceMode === 'local') {
-          throw new Error('Local model not ready. Switch to Hybrid or Edge mode.');
-        }
-        await chatService.sendMessage(messageContent, model, undefined, (chunk) => {
-          setStreamingMessage(prev => prev + chunk);
-        });
-        await loadMessages();
+        setMessages(prev => [...prev, assistantMessage]);
       }
-    } catch (error) {
-      console.error("Chat submission error:", error);
-      const errorMessage = error instanceof Error ? error.message : 'An unknown error occurred.';
-      const errorResponseMessage: Message = {
-        id: crypto.randomUUID(),
-        role: 'assistant',
-        content: `Error: ${errorMessage}`,
-        timestamp: Date.now(),
-      };
-      setMessages(prev => [...prev, errorResponseMessage]);
     }
     setStreamingMessage('');
     setIsProcessing(false);
@@ -151,47 +156,57 @@ function HomePageContent() {
       />
       <SidebarInset>
         <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 h-screen flex flex-col">
-          <header className="py-4 md:py-6 flex items-center justify-between">
-            <div className="flex items-center gap-2">
-              <SidebarTrigger className="lg:hidden" />
-              <motion.div initial={{ opacity: 0, x: -20 }} animate={{ opacity: 1, x: 0 }} className="hidden sm:block">
-                <h1 className="text-2xl md:text-3xl font-display font-bold text-foreground">
-                  Edge<span className="text-gradient bg-gradient-to-r from-[#F38020] to-[#2F3A8F]">Muse</span>
-                </h1>
-                <p className="text-xs text-muted-foreground">Local-first Universal LLM Chat</p>
-              </motion.div>
-            </div>
-            <div className="flex items-center gap-2 md:gap-4">
-              <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} transition={{ delay: 0.2 }}>
-                <EngineStatusBadge />
-              </motion.div>
-              <InferenceModeToggle />
-              <Button variant="outline" onClick={() => setIsModelManagerOpen(true)}>
-                <HardDrive className="w-4 h-4 mr-2" />
-                Models
-              </Button>
-              <ThemeToggle className="relative top-0 right-0" />
-            </div>
-          </header>
-          <main className="flex-1 pb-8 md:pb-10 lg:pb-12 min-h-0">
-            <Card className="h-full w-full max-w-4xl mx-auto glass-dark shadow-2xl shadow-primary/10 border-primary/20">
-              <ChatView
-                messages={messages}
-                streamingMessage={streamingMessage}
-                isProcessing={isProcessing}
-                input={input}
-                onInputChange={setInput}
-                onSubmit={handleSubmit}
-              />
-            </Card>
-          </main>
+          <div className="py-8 md:py-10 lg:py-12 flex-1 flex flex-col min-h-0">
+            <header className="pb-6 flex items-center justify-between">
+              <div className="flex items-center gap-2">
+                <SidebarTrigger className="lg:hidden" />
+                <motion.div initial={{ opacity: 0, x: -20 }} animate={{ opacity: 1, x: 0 }}>
+                  <h1 className="text-2xl md:text-3xl font-display font-bold text-foreground">
+                    Edge<span className="text-gradient bg-gradient-to-r from-[#F38020] to-[#2F3A8F]">Muse</span>
+                  </h1>
+                </motion.div>
+              </div>
+              <div className="flex items-center gap-2 md:gap-4">
+                <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} transition={{ delay: 0.2 }}>
+                  <EngineStatusBadge />
+                </motion.div>
+                <InferenceModeToggle />
+                <Button variant="outline" onClick={() => setIsModelManagerOpen(true)}>
+                  <HardDrive className="w-4 h-4 mr-0 sm:mr-2" />
+                  <span className="hidden sm:inline">Models</span>
+                </Button>
+                <Button variant="ghost" size="icon" onClick={() => setIsSettingsOpen(true)}>
+                  <Settings className="w-5 h-5" />
+                </Button>
+                <ThemeToggle className="relative top-0 right-0" />
+              </div>
+            </header>
+            <main className="flex-1 min-h-0">
+              <Card className="h-full w-full max-w-4xl mx-auto glass-dark shadow-2xl shadow-primary/10 border-primary/20">
+                <ChatView
+                  messages={messages}
+                  streamingMessage={streamingMessage}
+                  isProcessing={isProcessing}
+                  input={input}
+                  onInputChange={setInput}
+                  onSubmit={handleSubmit}
+                />
+              </Card>
+            </main>
+          </div>
           <footer className="text-center pb-4">
             <p className="text-xs text-muted-foreground">
-              Note: AI server usage is rate-limited. Local runs are unlimited on-device. Built with ❤️ at Cloudflare.
+              Built with ❤️ at Cloudflare. AI server usage is rate-limited. Local runs are unlimited.
             </p>
           </footer>
         </div>
         <ModelManager open={isModelManagerOpen} onOpenChange={setIsModelManagerOpen} />
+        <SettingsComponent
+          open={isSettingsOpen}
+          onOpenChange={setIsSettingsOpen}
+          advancedOptions={advancedOptions}
+          onAdvancedOptionsChange={setAdvancedOptions}
+        />
       </SidebarInset>
     </SidebarProvider>
   );
@@ -230,30 +245,20 @@ function InferenceModeToggle() {
         </SelectTrigger>
         <SelectContent>
           <SelectItem value="hybrid">
-            <div className="flex items-center gap-2">
-              <Cpu className="w-4 h-4" /> Hybrid
-            </div>
+            <div className="flex items-center gap-2"><Cpu className="w-4 h-4" /> Hybrid</div>
           </SelectItem>
           <Tooltip>
             <TooltipTrigger asChild>
               <div className={localDisabled ? 'opacity-50 cursor-not-allowed' : ''}>
                 <SelectItem value="local" disabled={localDisabled}>
-                  <div className="flex items-center gap-2">
-                    <HardDrive className="w-4 h-4" /> Local
-                  </div>
+                  <div className="flex items-center gap-2"><HardDrive className="w-4 h-4" /> Local</div>
                 </SelectItem>
               </div>
             </TooltipTrigger>
-            {localDisabled && (
-              <TooltipContent>
-                <p>Local engine not available or model not loaded.</p>
-              </TooltipContent>
-            )}
+            {localDisabled && <TooltipContent><p>Local engine not available or model not loaded.</p></TooltipContent>}
           </Tooltip>
           <SelectItem value="edge">
-            <div className="flex items-center gap-2">
-              <Server className="w-4 h-4" /> Edge
-            </div>
+            <div className="flex items-center gap-2"><Server className="w-4 h-4" /> Edge</div>
           </SelectItem>
         </SelectContent>
       </Select>
@@ -263,6 +268,7 @@ function InferenceModeToggle() {
 export function HomePage() {
   return (
     <LocalEngineProvider>
+      <Toaster richColors />
       <HomePageContent />
     </LocalEngineProvider>
   );

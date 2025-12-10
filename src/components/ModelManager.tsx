@@ -1,5 +1,5 @@
 import { useState, useEffect, useCallback } from 'react';
-import { Cpu, MemoryStick, Trash2, Wand2, CheckCircle, XCircle, Download, RotateCw } from 'lucide-react';
+import { Cpu, MemoryStick, Trash2, Wand2, Download, RotateCw, AlertTriangle } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Sheet, SheetContent, SheetHeader, SheetTitle, SheetDescription, SheetFooter } from '@/components/ui/sheet';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
@@ -39,11 +39,11 @@ export function ModelManager({ open, onOpenChange }: ModelManagerProps) {
   }, [open, refreshModels]);
   const handleLoadModel = async (model: LocalModel) => {
     toast.info(`Loading ${model.name}...`);
-    const success = await initialize(model);
+    const success = await initialize(model).catch(() => false);
     if (success) {
       toast.success(`${model.name} loaded successfully!`);
     } else {
-      toast.error(`Failed to load ${model.name}.`);
+      toast.error(`Failed to load ${model.name}. Your device may not have enough memory. Try Hybrid mode.`);
     }
   };
   const handleDownloadModel = async (model: LocalModel) => {
@@ -64,7 +64,7 @@ export function ModelManager({ open, onOpenChange }: ModelManagerProps) {
   };
   return (
     <>
-      <Toaster />
+      <Toaster richColors />
       <Sheet open={open} onOpenChange={onOpenChange}>
         <SheetContent className="w-full sm:max-w-2xl p-0">
           <SheetHeader className="p-6 border-b">
@@ -129,19 +129,20 @@ export function ModelManager({ open, onOpenChange }: ModelManagerProps) {
 }
 function ModelCard({ model, onLoad, onRemove, onDownload, isDownloaded, isLoading, isCurrent, progress }: { model: LocalModel; onLoad: (model: LocalModel) => void; onRemove?: (id: string) => void; onDownload?: (model: LocalModel) => void; isDownloaded: boolean; isLoading: boolean; isCurrent: boolean; progress: number; }) {
   return (
-    <Card className="flex flex-col sm:flex-row items-start sm:items-center justify-between p-4 gap-4">
+    <Card className="flex flex-col sm:flex-row items-start sm:items-center justify-between p-4 gap-4 transition-all hover:shadow-md">
       <div className="flex-1">
         <h3 className="font-semibold flex items-center gap-2">
           {model.name}
           {isCurrent && <Badge variant="secondary" className="bg-green-100 text-green-800 dark:bg-green-900 dark:text-green-200">Loaded</Badge>}
         </h3>
-        <div className="flex items-center gap-4 text-sm text-muted-foreground mt-1">
+        <div className="flex flex-wrap items-center gap-x-4 gap-y-1 text-sm text-muted-foreground mt-1">
           <span className="flex items-center gap-1"><Cpu className="w-4 h-4" /> {model.family}</span>
           <span className="flex items-center gap-1"><MemoryStick className="w-4 h-4" /> {formatModelSize(estimateRamForModel(model.size))} RAM</span>
+          <Badge variant="outline" className="font-mono text-xs">{model.quantization}</Badge>
         </div>
         {isLoading && <Progress value={progress} className="mt-2 h-1" />}
       </div>
-      <div className="flex items-center gap-2">
+      <div className="flex items-center gap-2 self-start sm:self-center">
         {isDownloaded ? (
           <Button variant="outline" size="sm" onClick={() => onLoad(model)} disabled={isLoading || isCurrent}>
             {isLoading ? <RotateCw className="w-4 h-4 mr-2 animate-spin" /> : <Wand2 className="w-4 h-4 mr-2" />}
@@ -154,7 +155,7 @@ function ModelCard({ model, onLoad, onRemove, onDownload, isDownloaded, isLoadin
           </Button>
         )}
         {onRemove && (
-          <Button variant="ghost" size="icon" onClick={() => onRemove(model.id)}>
+          <Button variant="ghost" size="icon" onClick={() => onRemove(model.id)} className="text-muted-foreground hover:text-destructive">
             <Trash2 className="w-4 h-4" />
           </Button>
         )}

@@ -4,13 +4,12 @@ import { Button } from '@/components/ui/button';
 import { Label } from '@/components/ui/label';
 import { Slider } from '@/components/ui/slider';
 import { Input } from '@/components/ui/input';
+import { Switch } from '@/components/ui/switch';
 import { Badge } from '@/components/ui/badge';
 import { Separator } from '@/components/ui/separator';
-import { CheckCircle, XCircle, Cpu, MemoryStick, AlertTriangle, Database } from 'lucide-react';
+import { CheckCircle, XCircle, Cpu, MemoryStick, AlertTriangle } from 'lucide-react';
 import { chatService } from '@/lib/chat';
-import { getStorageEstimate, type StorageEstimate } from '@/lib/local-model';
-import { toast } from '@/components/ui/sonner';
-import '@/types/navigator.d.ts';
+import type { InferenceMode } from '@/lib/chat';
 interface SettingsProps {
   open: boolean;
   onOpenChange: (open: boolean) => void;
@@ -20,40 +19,19 @@ interface SettingsProps {
 export function Settings({ open, onOpenChange, advancedOptions, onAdvancedOptionsChange }: SettingsProps) {
   const [diagnostics, setDiagnostics] = useState({
     webGpu: 'checking' as 'supported' | 'unsupported' | 'checking',
-    wasmSimd: 'checking' as 'supported' | 'unsupported' | 'checking',
-    deviceMemory: (navigator as any).deviceMemory || 0,
-    storage: null as StorageEstimate | null,
+    deviceMemory: navigator.deviceMemory || 0,
   });
   useEffect(() => {
-    if (!open) return;
-    async function runChecks() {
-      // WebGPU Check
-      const adapter = await navigator.gpu?.requestAdapter();
-      const webGpu = adapter ? 'supported' : 'unsupported';
-      // WASM SIMD Check
-      const wasmSimd = await (async () => {
-        try {
-          // This is the official way to detect SIMD support.
-          return await WebAssembly.validate(new Uint8Array([0, 97, 115, 109, 1, 0, 0, 0, 1, 5, 1, 96, 0, 1, 123, 3, 2, 1, 0, 10, 10, 1, 8, 0, 65, 0, 253, 15, 253, 98, 11]));
-        } catch (e) {
-          return false;
-        }
-      })() ? 'supported' : 'unsupported';
-      // Storage Check
-      const storage = await getStorageEstimate();
-      if (storage && storage.quota > 0 && storage.usage / storage.quota > 0.8) {
-        toast.warning('Local model storage is nearly full.', {
-          description: 'Consider removing unused models to free up space.',
-        });
-      }
-      setDiagnostics(d => ({ ...d, webGpu, wasmSimd, storage: storage ?? null }));
+    async function checkWebGpu() {
+      const supported = await navigator.gpu?.requestAdapter() != null;
+      setDiagnostics(d => ({ ...d, webGpu: supported ? 'supported' : 'unsupported' }));
     }
-    runChecks();
-  }, [open]);
-  const formatBytes = (bytes: number) => {
-    if (bytes === 0) return '0 B';
-    const i = Math.floor(Math.log(bytes) / Math.log(1024));
-    return `${parseFloat((bytes / Math.pow(1024, i)).toFixed(2))} ${['B', 'KB', 'MB', 'GB', 'TB'][i]}`;
+    checkWebGpu();
+  }, []);
+  const handleModeChange = (checked: boolean) => {
+    const newMode: InferenceMode = checked ? 'hybrid' : 'edge';
+    chatService.setInferenceMode(newMode);
+    // Force a re-render in parent if needed, but for now, service is sufficient
   };
   return (
     <Sheet open={open} onOpenChange={onOpenChange}>
@@ -91,10 +69,22 @@ export function Settings({ open, onOpenChange, advancedOptions, onAdvancedOption
           <Separator />
           <div className="space-y-4">
             <h3 className="font-semibold text-foreground">Device Diagnostics</h3>
-            <DiagnosticItem icon={Cpu} label="WebGPU Support" status={diagnostics.webGpu} />
-            <DiagnosticItem icon={Cpu} label="WASM SIMD Support" status={diagnostics.wasmSimd} />
-            <DiagnosticItem icon={MemoryStick} label="Device Memory" value={diagnostics.deviceMemory ? `${diagnostics.deviceMemory} GB (approx)` : 'N/A'} />
-            <DiagnosticItem icon={Database} label="Local Storage" value={diagnostics.storage ? `${formatBytes(diagnostics.storage.usage ?? 0)} / ${formatBytes(diagnostics.storage.quota ?? 0)}` : 'N/A'} />
+            <div className="flex items-center justify-between p-3 rounded-lg bg-muted/50">
+              <div className="flex items-center gap-2">
+                <Cpu className="w-5 h-5 text-muted-foreground" />
+                <span className="font-medium">WebGPU Support</span>
+              </div>
+              {diagnostics.webGpu === 'checking' && <Badge variant="secondary">Checking...</Badge>}
+              {diagnostics.webGpu === 'supported' && <Badge className="bg-green-100 text-green-800"><CheckCircle className="w-4 h-4 mr-1" /> Supported</Badge>}
+              {diagnostics.webGpu === 'unsupported' && <Badge variant="destructive"><XCircle className="w-4 h-4 mr-1" /> Unsupported</Badge>}
+            </div>
+            <div className="flex items-center justify-between p-3 rounded-lg bg-muted/50">
+              <div className="flex items-center gap-2">
+                <MemoryStick className="w-5 h-5 text-muted-foreground" />
+                <span className="font-medium">Device Memory</span>
+              </div>
+              <Badge variant="outline">{diagnostics.deviceMemory ? `${diagnostics.deviceMemory} GB (approx)` : 'N/A'}</Badge>
+            </div>
             {diagnostics.webGpu === 'unsupported' && (
               <div className="flex items-start gap-2 text-sm text-amber-700 dark:text-amber-400 p-3 rounded-lg bg-amber-50 dark:bg-amber-900/20">
                 <AlertTriangle className="w-5 h-5 mt-0.5 flex-shrink-0" />
@@ -108,23 +98,5 @@ export function Settings({ open, onOpenChange, advancedOptions, onAdvancedOption
         </SheetFooter>
       </SheetContent>
     </Sheet>
-  );
-}
-function DiagnosticItem({ icon: Icon, label, status, value }: { icon: React.ElementType, label: string, status?: 'checking' | 'supported' | 'unsupported', value?: string }) {
-  return (
-    <div className="flex items-center justify-between p-3 rounded-lg bg-muted/50">
-      <div className="flex items-center gap-2">
-        <Icon className="w-5 h-5 text-muted-foreground" />
-        <span className="font-medium">{label}</span>
-      </div>
-      {status && (
-        <>
-          {status === 'checking' && <Badge variant="secondary">Checking...</Badge>}
-          {status === 'supported' && <Badge className="bg-green-100 text-green-800 dark:bg-green-900 dark:text-green-200"><CheckCircle className="w-4 h-4 mr-1" /> Supported</Badge>}
-          {status === 'unsupported' && <Badge variant="destructive"><XCircle className="w-4 h-4 mr-1" /> Unsupported</Badge>}
-        </>
-      )}
-      {value && <Badge variant="outline">{value}</Badge>}
-    </div>
   );
 }
