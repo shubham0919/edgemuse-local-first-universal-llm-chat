@@ -27,7 +27,9 @@ export function LocalEngineProvider({ children }: { children: ReactNode }) {
     setState(s => ({ ...s, status: 'initializing', error: null, currentModel: model, initProgress: 0 }));
     console.log(`Initializing model: ${model.name}`);
     try {
-      await workerApi.init(model.id, Comlink.proxy(onProgress));
+      // FIX: The worker's init function expects only one argument.
+      // Progress reporting is not wired up in this version of the worker.
+      await workerApi.init(model.id);
       setState(s => ({ ...s, status: 'ready', currentModel: model, initProgress: 100 }));
       return true;
     } catch (err) {
@@ -44,7 +46,9 @@ export function LocalEngineProvider({ children }: { children: ReactNode }) {
     }
     setState(s => ({ ...s, status: 'generating' }));
     try {
-      await workerApi.generate(prompt, Comlink.proxy(onToken), options);
+      // FIX: The worker's generate function expects two arguments.
+      // Advanced options are not passed in this version.
+      await workerApi.generate(prompt, Comlink.proxy(onToken));
     } catch (err) {
       const errorMsg = err instanceof Error ? err.message : 'Unknown error during generation';
       console.error(errorMsg);

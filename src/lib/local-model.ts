@@ -58,7 +58,11 @@ export function formatModelSize(bytes: number): string {
   return parseFloat((bytes / Math.pow(k, i)).toFixed(2)) + ' ' + sizes[i];
 }
 export async function supportsWebGPU(): Promise<boolean> {
-  return await navigator.gpu?.requestAdapter() != null;
+  // FIX: Safely check for navigator.gpu before attempting to use it.
+  if (!navigator.gpu) {
+    return false;
+  }
+  return await navigator.gpu.requestAdapter() != null;
 }
 export function estimateRamForModel(modelSize: number): number {
   // A rough estimate: model size + ~50% overhead for context, KV cache, etc.

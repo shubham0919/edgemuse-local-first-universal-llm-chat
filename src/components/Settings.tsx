@@ -19,11 +19,13 @@ interface SettingsProps {
 export function Settings({ open, onOpenChange, advancedOptions, onAdvancedOptionsChange }: SettingsProps) {
   const [diagnostics, setDiagnostics] = useState({
     webGpu: 'checking' as 'supported' | 'unsupported' | 'checking',
-    deviceMemory: navigator.deviceMemory || 0,
+    // FIX: Safely access non-standard `deviceMemory` property.
+    deviceMemory: (navigator as any).deviceMemory || 0,
   });
   useEffect(() => {
     async function checkWebGpu() {
-      const supported = await navigator.gpu?.requestAdapter() != null;
+      // FIX: Safely access `navigator.gpu` which may not exist.
+      const supported = await (navigator.gpu?.requestAdapter() != null);
       setDiagnostics(d => ({ ...d, webGpu: supported ? 'supported' : 'unsupported' }));
     }
     checkWebGpu();
